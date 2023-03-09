@@ -5,22 +5,41 @@ var client = new HttpClient();
 var response = await client.GetAsync($"https://docs.google.com/spreadsheets/d/1pwQ3V_mTEvUgaa-FoCeiI2TWtst4NzTsApZQCjDuoU0/export?format=csv&id=1pwQ3V_mTEvUgaa-FoCeiI2TWtst4NzTsApZQCjDuoU0&gid=1581013005");
 var content = await response.Content.ReadAsStringAsync();
 
-var moons = GetMoons(content);
+var moons = GetMoons(content).ToList();
 Console.WriteLine("========== New Eden Moons ==========");
 Console.WriteLine();
 
-var aLotOfMoons = moons.SelectMany(moon =>
+static IEnumerable<Moon> GetOrderedMoonPops(IEnumerable<Moon> moons)
 {
-    return GetManyMoons(moon);
-});
+    var currentDay = DateOnly.FromDateTime(DateTime.UtcNow - TimeSpan.FromDays(1));
+    while (true)
+    {
+        var list = new List<Moon>();
+        foreach (var moon in moons)
+        {
+            while (moon.PopDay < currentDay)
+            {
+                moon.Pop();
+            }
+
+            if (moon.PopDay == currentDay)
+                list.Add(moon);
+        }
+
+        foreach (var moon in list.OrderBy(x => x.PopTimeUtc).ThenBy(x => x.SystemName).ThenBy(x => x.AthanorName))
+            yield return moon;
+
+        currentDay = currentDay.AddDays(1);
+    }
+}
 
 DateOnly lastDate;
-foreach (var moon in aLotOfMoons.OrderBy(x => x.PopTimeUtc).Where(x => x.PopTimeUtc > DateTime.UtcNow - TimeSpan.FromDays(1) && x.PopTimeUtc < DateTime.UtcNow + TimeSpan.FromDays(200)))
+foreach (var moon in GetOrderedMoonPops(moons))
 {
-    if (lastDate != DateOnly.FromDateTime(moon.PopTimeUtc))
+    if (lastDate != moon.PopDay)
     {
         Console.ReadLine();
-        lastDate = DateOnly.FromDateTime(moon.PopTimeUtc);
+        lastDate = moon.PopDay;
     }
 
     if (moon.SystemName == "Slays")
@@ -77,16 +96,6 @@ static string GetPeriod(int periodWeeks)
         _ => throw new NotSupportedException("Unknown moon period.")
     };
 
-static IEnumerable<Moon> GetManyMoons(Moon moon)
-{
-    yield return moon;
-    for (var i = 0; i < 50; i++)
-    {
-        moon = moon.GetNextMoon();
-        yield return moon;
-    }
-}
-
 static IEnumerable<Moon> GetMoons(string content)
 {
     var header = 0;
@@ -108,7 +117,10 @@ static IEnumerable<Moon> GetMoons(string content)
             continue;
         }
 
-        yield return new Moon(columns[1], columns[2], ParsePopTime(columns[3], columns[5]), Convert.ToInt32(columns[4]), columns[6]);
+        yield return new Moon(columns[1], columns[2], Convert.ToInt32(columns[4]), columns[6])
+        {
+            PopTimeUtc = ParsePopTime(columns[3], columns[5])
+        };
     }
 }
 
@@ -163,12 +175,18 @@ static DateTime ParsePopTime(string date, string time)
 public sealed record Moon(
     string SystemName,
     string AthanorName,
-    DateTime PopTimeUtc,
     int PeriodWeeks,
     string NotLaterThan)
 {
-    public Moon GetNextMoon() => this with
+    public DateTime PopTimeUtc { get; set; }
+
+    public DateOnly PopDay => DateOnly.FromDateTime(PopTimeUtc);
+
+    /// <summary>
+    /// Pops the moon, i.e. advances its pop time by the pop period.
+    /// </summary>
+    public void Pop()
     {
-        PopTimeUtc = PopTimeUtc + TimeSpan.FromDays(PeriodWeeks * 7)
-    };
+        PopTimeUtc = PopTimeUtc + TimeSpan.FromDays(PeriodWeeks * 7);
+    }
 }
